@@ -1,0 +1,120 @@
+#include <iostream>
+#include <fstream>
+#include <thread>
+#include <vector>
+#include <mutex>
+
+using namespace std;
+
+mutex mtx;
+
+// Simple Run-Length Encoding compression
+string compressRLE(const string& data) {
+    string result;
+    for (size_t i = 0; i < data.size(); ) {
+        char current = data[i];
+        size_t count = 1;
+        while (i + count < data.size() && data[i + count] == current) count++;
+        result += current + to_string(count);
+        i += count;
+    }
+    return result;
+}
+
+// Simple RLE decompression
+string decompressRLE(const string& data) {
+    string result;
+    for (size_t i = 0; i < data.size(); ) {
+        char current = data[i++];
+        string countStr;
+        while (i < data.size() && isdigit(data[i]))
+            countStr += data[i++];
+        int count = stoi(countStr);
+        result += string(count, current);
+    }
+    return result;
+}
+
+// Threaded chunk processing
+void processChunk(const string& chunk, string& output, bool compressMode) {
+    string result = compressMode ? compressRLE(chunk) : decompressRLE(chunk);
+    lock_guard<mutex> lock(mtx);
+    output += result;
+}
+
+void processFile(const string& inputFile, const string& outputFile, bool compressMode) {
+    ifstream in(inputFile, ios::in);
+    if (!in) {
+        cerr << "Error: Unable to open input file.\n";
+        return;
+    }
+
+    string content((istreambuf_iterator<char>(in)), istreambuf_iterator<char>());
+    in.close();
+
+    size_t threadCount = thread::hardware_concurrency();
+    if (threadCount == 0) threadCount = 2;
+
+    vector<thread> threads;
+    vector<string> chunks(threadCount);
+    vector<string> results(threadCount);
+
+    size_t chunkSize = content.size() / threadCount;
+
+    for (size_t i = 0; i < threadCount; ++i) {
+        size_t start = i * chunkSize;
+        size_t end = (i == threadCount - 1) ? content.size() : start + chunkSize;
+        chunks[i] = content.substr(start, end - start);
+    }
+
+    string finalOutput;
+
+    for (size_t i = 0; i < threadCount; ++i) {
+        threads.emplace_back(processChunk, ref(chunks[i]), ref(finalOutput), compressMode);
+    }
+
+    for (auto& t : threads) t.join();
+
+    ofstream out(outputFile, ios::out | ios::trunc);
+    if (!out) {
+        cerr << "Error: Unable to write to output file.\n";
+        return;
+    }
+    out << finalOutput;
+    out.close();
+
+    cout << (compressMode ? "Compression" : "Decompression") << " completed successfully.\n";
+}
+
+int main() {
+    string inputFile, outputFile;
+    int choice;
+
+    while (true) {
+        cout << "\n--- File Compressor Tool ---\n";
+        cout << "1. Compress File\n";
+        cout << "2. Decompress File\n";
+        cout << "3. Exit\n";
+        cout << "Enter your choice: ";
+        cin >> choice;
+        cin.ignore();
+
+        if (choice == 3) break;
+
+        cout << "Enter input file path: ";
+        getline(cin, inputFile);
+
+        cout << "Enter output file path: ";
+        getline(cin, outputFile);
+
+        if (choice == 1) {
+            processFile(inputFile, outputFile, true);
+        } else if (choice == 2) {
+            processFile(inputFile, outputFile, false);
+        } else {
+            cout << "Invalid choice.\n";
+        }
+    }
+
+    return 0;
+}
